@@ -1,139 +1,189 @@
-import * as THREE from 'three/webgpu';
-import {
-  Fn,
-  If,
-  color,
-  hash,
-  instanceIndex,
-  instancedArray,
-  max,
-  mix,
-  mod,
-  step,
-  uint,
-  uv,
-  vec3,
-  vec4
-} from 'three/tsl';
+import * as THREE from 'three';
 
-export function createSimulation({ renderer, scene, params, count = 131072 }) {
-  // STATE -----------------------------------------------------------------
-  // Each particle owns position and velocity. The arrays live in GPU storage.
-  const positionBuffer = instancedArray(count, 'vec3');
-  const velocityBuffer = instancedArray(count, 'vec3');
+export function createSimulation({ scene, params, count = 65000 }) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  const velocities = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
 
-  // INITIALIZATION --------------------------------------------------------
-  // A compute pass writes the initial state for every particle in parallel.
-  const initParticles = Fn(() => {
-    const i = instanceIndex;
-    const p = positionBuffer.element(i);
-    const v = velocityBuffer.element(i);
+  // Paleta de gradiente infrarrojo exacto a imágenes de referencia
+  const thermalPalette = {
+    core: new THREE.Color('#ffffff'),      // Incandescencia blanca
+    yellow: new THREE.Color('#ffee00'),    // Amarillo térmico
+    orange: new THREE.Color('#ff4400'),    // Naranja / Rojo fuego
+    magenta: new THREE.Color('#d400aa'),   // Violeta neón / Magenta
+    purple: new THREE.Color('#400080')     // Violeta oscuro exterior
+  };
 
-    const r1 = hash(i.add(uint(11)));
-    const r2 = hash(i.add(uint(23)));
-    const r3 = hash(i.add(uint(37)));
-    const r4 = hash(i.add(uint(53)));
-    const r5 = hash(i.add(uint(71)));
-    const r6 = hash(i.add(uint(89)));
-
-    p.assign(vec3(r1, r2, r3).sub(0.5).mul(params.boundsSize.mul(0.45)));
-    v.assign(vec3(r4, r5, r6).sub(0.5).mul(params.initialSpeed));
-  })().compute(count).setName('Initialize Particles');
-
-  // UPDATE / COMPUTE SHADER ----------------------------------------------
-  // This is the conceptual heart of the project:
-  // state -> forces -> acceleration -> velocity -> position.
-  const updateParticles = Fn(() => {
-    const p = positionBuffer.element(instanceIndex);
-    const v = velocityBuffer.element(instanceIndex);
-
-    const dt = params.dt.mul(params.timeScale);
-    const force = vec3(0.0).toVar();
-
-    // 1) CONSTANT / WIND FORCE
-    force.addAssign(params.wind.mul(params.windEnabled));
-
-    // 2) RADIAL FORCE (positive = attraction, negative = repulsion)
-    const toAttractor = params.attractor.sub(p);
-    const distance = max(toAttractor.length(), params.softening);
-    const radialDirection = toAttractor.div(distance);
-    const radialForce = radialDirection
-      .mul(params.radialStrength)
-      .div(distance.pow(2))
-      .mul(params.radialEnabled);
-    force.addAssign(radialForce);
-
-    // 3) VORTEX FORCE: tangent to the radial direction around Z.
-    const zAxis = vec3(0.0, 0.0, 1.0);
-    const tangent = zAxis.cross(radialDirection);
-    force.addAssign(tangent.mul(params.vortexStrength).mul(params.vortexEnabled));
-
-    // 4) LINEAR DRAG: F = -c v
-    force.addAssign(v.mul(params.dragCoefficient).mul(params.dragEnabled).mul(-1.0));
-
-    // INTEGRATION ---------------------------------------------------------
-    // Unit mass: a = F. Semi-implicit Euler: update v, then p.
-    v.addAssign(force.mul(dt));
-
-    const speed = v.length();
-    If(speed.greaterThan(params.maxSpeed), () => {
-      v.assign(v.normalize().mul(params.maxSpeed));
-    });
-
-    p.addAssign(v.mul(dt));
-
-    // Periodic boundary conditions: particles leaving one side re-enter.
-    const half = params.boundsSize.mul(0.5);
-    p.assign(mod(p.add(half), params.boundsSize).sub(half));
-  })().compute(count).setName('Update Particles');
-
-  // RENDER ---------------------------------------------------------------
-  // Rendering does not recompute the physics. It consumes the GPU state.
-  const material = new THREE.SpriteNodeMaterial({
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    transparent: true
-  });
-
-  material.positionNode = positionBuffer.toAttribute();
-  material.scaleNode = params.particleSize;
-
-  material.colorNode = Fn(() => {
-    const speed = velocityBuffer.toAttribute().length();
-    const t = speed.div(params.maxSpeed).clamp(0.0, 1.0);
-    const slow = color('#46a6ff');
-    const fast = color('#ffb35a');
-    return vec4(mix(slow, fast, t), 1.0);
-  })();
-
-  // Circular sprite mask, avoiding visible square planes.
-  material.opacityNode = step(uv().xy.sub(0.5).length(), 0.5);
-
-  const geometry = new THREE.PlaneGeometry(1, 1);
-  const mesh = new THREE.InstancedMesh(geometry, material, count);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
+  const tempColor = new THREE.Color();
 
   function reset() {
-    renderer.compute(initParticles);
+    for (let i = 0; i < count; i++) {
+      const i3 = i * 3;
+
+      // Dispersión volumétrica inicial
+      const u = Math.random();
+      const v = Math.random();
+      const theta = u * Math.PI * 2.0;
+      const phi = Math.acos(2.0 * v - 1.0);
+      const r = Math.cbrt(Math.random()) * 2.3;
+
+      positions[i3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i3 + 2] = r * Math.cos(phi);
+
+      velocities[i3] = (Math.random() - 0.5) * 0.08;
+      velocities[i3 + 1] = (Math.random() - 0.5) * 0.08;
+      velocities[i3 + 2] = (Math.random() - 0.5) * 0.08;
+    }
+
+    if (geometry.attributes.position) {
+      geometry.attributes.position.needsUpdate = true;
+    }
   }
+
+  reset();
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // Generación de textura de partícula suave (Glow Point)
+  const canvas = document.createElement('canvas');
+  canvas.width = 16; canvas.height = 16;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(8, 8, 0, 8, 8, 8);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.5)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 16, 16);
+  const particleTexture = new THREE.CanvasTexture(canvas);
+
+  const material = new THREE.PointsMaterial({
+    size: params.particleSize.value,
+    map: particleTexture,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+
+  const points = new THREE.Points(geometry, material);
+  scene.add(points);
 
   function stepSimulation() {
-    renderer.compute(updateParticles);
+    material.size = params.particleSize.value;
+
+    const dt = params.dt.value * params.timeScale.value;
+    const pos = geometry.attributes.position.array;
+    const col = geometry.attributes.color.array;
+
+    for (let i = 0; i < count; i++) {
+      const i3 = i * 3;
+      let px = pos[i3], py = pos[i3 + 1], pz = pos[i3 + 2];
+      let vx = velocities[i3], vy = velocities[i3 + 1], vz = velocities[i3 + 2];
+
+      let ax = 0, ay = 0, az = 0;
+
+      // 1. Tecla W: Formación Espiral / Phyllotaxis (Girasol)
+      if (params.keyW.value) {
+        const phi = i * 137.5 * (Math.PI / 180);
+        const rSun = 0.012 * Math.sqrt(i);
+        ax += (Math.cos(phi) * rSun - px) * 5.0;
+        ay += (Math.sin(phi) * rSun - py) * 5.0;
+      }
+
+      // 2. Tecla A: Repulsión Horizontal / Viento
+      if (params.keyA.value) {
+        ax -= 9.5;
+        ay += Math.sin(px * 2.5) * 2.5;
+      }
+
+      // 3. Tecla S: Drip Style (Gravedad Fluida)
+      if (params.keyS.value) {
+        ay -= 10.5;
+        ax += (Math.random() - 0.5) * 2.0;
+      }
+
+      // 4. Tecla D: Atracción Implosiva al Centro
+      if (params.keyD.value) {
+        const dist = Math.sqrt(px * px + py * py + pz * pz) + 0.1;
+        ax -= (px / dist) * 15.0;
+        ay -= (py / dist) * 15.0;
+        az -= (pz / dist) * 15.0;
+      }
+
+      // 5. Tecla I: Dispersión 3D Explosiva
+      if (params.keyI.value) {
+        const dist = Math.sqrt(px * px + py * py + pz * pz) + 0.1;
+        ax += (px / dist) * 16.0;
+        ay += (py / dist) * 16.0;
+        az += (pz / dist) * 16.0;
+      }
+
+      // 6. Tecla K: Compresión Radial sobre el Eje Central
+      if (params.keyK.value) {
+        ax -= px * 9.5;
+        az -= pz * 9.5;
+      }
+
+      // 7. Tecla J: Vórtice Anti-Horario
+      if (params.keyJ.value) {
+        ax += -pz * 7.5;
+        az += px * 7.5;
+      }
+
+      // 8. Tecla L: Vórtice Horario con Elevación Z
+      if (params.keyL.value) {
+        ax += pz * 7.5;
+        az += -px * 7.5;
+        ay += Math.cos(px * 2.0) * 4.0;
+      }
+
+      // Fricción / Amortiguamiento
+      ax -= vx * 0.18;
+      ay -= vy * 0.18;
+      az -= vz * 0.18;
+
+      vx += ax * dt; vy += ay * dt; vz += az * dt;
+      px += vx * dt; py += vy * dt; pz += vz * dt;
+
+      // Recirculación limpia en fronteras
+      const limit = 8.5;
+      if (Math.abs(px) > limit || Math.abs(py) > limit || Math.abs(pz) > limit) {
+        px = (Math.random() - 0.5) * 1.5;
+        py = (Math.random() - 0.5) * 1.5;
+        pz = (Math.random() - 0.5) * 1.5;
+        vx = 0; vy = 0; vz = 0;
+      }
+
+      pos[i3] = px; pos[i3 + 1] = py; pos[i3 + 2] = pz;
+      velocities[i3] = vx; velocities[i3 + 1] = vy; velocities[i3 + 2] = vz;
+
+      // Mapeo Térmico por distancia radial + velocidad
+      const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      const rDist = Math.min(Math.sqrt(px * px + py * py + pz * pz) / 2.8, 1.0);
+      const factor = Math.min((rDist * 0.8 + speed * 0.08), 1.0);
+
+      if (factor < 0.2) {
+        tempColor.copy(thermalPalette.core).lerp(thermalPalette.yellow, factor * 5.0);
+      } else if (factor < 0.45) {
+        tempColor.copy(thermalPalette.yellow).lerp(thermalPalette.orange, (factor - 0.2) * 4.0);
+      } else if (factor < 0.75) {
+        tempColor.copy(thermalPalette.orange).lerp(thermalPalette.magenta, (factor - 0.45) * 3.33);
+      } else {
+        tempColor.copy(thermalPalette.magenta).lerp(thermalPalette.purple, (factor - 0.75) * 4.0);
+      }
+
+      col[i3] = tempColor.r;
+      col[i3 + 1] = tempColor.g;
+      col[i3 + 2] = tempColor.b;
+    }
+
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
   }
 
-  function dispose() {
-    geometry.dispose();
-    material.dispose();
-    scene.remove(mesh);
-  }
-
-  return {
-    count,
-    positionBuffer,
-    velocityBuffer,
-    reset,
-    stepSimulation,
-    dispose
-  };
+  return { reset, stepSimulation };
 }
