@@ -1,62 +1,104 @@
 import * as THREE from 'three';
 
-export function createSimulation({ scene, params, count = 65000 }) {
+export function createSimulation({ scene, params, count = 35000 }) {
   const geometry = new THREE.BufferGeometry();
   const positions = new Float32Array(count * 3);
+  const targetPositions = new Float32Array(count * 3);
   const velocities = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
+  const seeds = new Float32Array(count * 3);
 
-  // Paleta de gradiente infrarrojo exacto a imágenes de referencia
-  const thermalPalette = {
-    core: new THREE.Color('#ffffff'),      // Incandescencia blanca
-    yellow: new THREE.Color('#ffee00'),    // Amarillo térmico
-    orange: new THREE.Color('#ff4400'),    // Naranja / Rojo fuego
-    magenta: new THREE.Color('#d400aa'),   // Violeta neón / Magenta
-    purple: new THREE.Color('#400080')     // Violeta oscuro exterior
-  };
+  for (let i = 0; i < count; i++) {
+    seeds[i * 3]     = Math.random();
+    seeds[i * 3 + 1] = Math.random();
+    seeds[i * 3 + 2] = Math.random();
+  }
 
-  const tempColor = new THREE.Color();
+  // Genera la forma objetivo (Target) para mantener la escultura reconocible
+  function calculateTargetShape() {
+    const rBase = params.sphereRadius.value;
+    const mode = params.morphologyMode.value;
+    const spikes = params.spikeAmount.value;
 
-  function reset() {
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
+      const u = seeds[i3];
+      const v = seeds[i3 + 1];
+      const w = seeds[i3 + 2];
 
-      // Dispersión volumétrica inicial
-      const u = Math.random();
-      const v = Math.random();
-      const theta = u * Math.PI * 2.0;
-      const phi = Math.acos(2.0 * v - 1.0);
-      const r = Math.cbrt(Math.random()) * 2.3;
+      let x = 0, y = 0, z = 0;
 
-      positions[i3] = r * Math.sin(phi) * Math.cos(theta);
-      positions[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-      positions[i3 + 2] = r * Math.cos(phi);
+      if (mode === 0) { // Dalia Organoide
+        const theta = u * Math.PI * 2;
+        const phi = Math.acos(2 * v - 1);
+        const petal = Math.sin(theta * 8) * Math.cos(phi * 8) * 0.35;
+        const r = rBase * (0.8 + petal);
+        x = r * Math.sin(phi) * Math.cos(theta);
+        y = r * Math.sin(phi) * Math.sin(theta);
+        z = r * Math.cos(phi);
+      } 
+      else if (mode === 1) { // Crisálida / Rosa Helicoidal
+        const theta = u * Math.PI * 8;
+        const h = (v - 0.5) * 2 * rBase;
+        const r = Math.sqrt(Math.max(0, rBase * rBase - h * h)) * (0.6 + 0.4 * Math.sin(theta));
+        x = r * Math.cos(theta);
+        y = h;
+        z = r * Math.sin(theta);
+      } 
+      else if (mode === 2) { // Panal / Enjambre Contenido
+        const theta = u * Math.PI * 2;
+        const phi = Math.acos(2 * v - 1);
+        const grid = (Math.floor(u * 20) / 20) * Math.PI * 2;
+        const r = rBase * (0.9 + 0.1 * Math.sin(w * 50));
+        x = r * Math.sin(phi) * Math.cos(grid);
+        y = r * Math.sin(phi) * Math.sin(grid);
+        z = r * Math.cos(phi);
+      } 
+      else if (mode === 3) { // Prisma / Flora Cristalina
+        const theta = u * Math.PI * 2;
+        const phi = Math.acos(2 * v - 1);
+        const mod = Math.pow(Math.abs(Math.sin(theta * 3) * Math.sin(phi * 3)), 0.5);
+        const r = rBase * (0.5 + mod * 0.8);
+        x = r * Math.sin(phi) * Math.cos(theta);
+        y = r * Math.sin(phi) * Math.sin(theta);
+        z = r * Math.cos(phi);
+      }
 
-      velocities[i3] = (Math.random() - 0.5) * 0.08;
-      velocities[i3 + 1] = (Math.random() - 0.5) * 0.08;
-      velocities[i3 + 2] = (Math.random() - 0.5) * 0.08;
-    }
+      // Deformación Q (Espinas / Spikes)
+      if (spikes > 0.01) {
+        const noise = Math.sin(u * 40) * Math.cos(v * 40);
+        const spikeFactor = 1.0 + noise * spikes * 1.5;
+        x *= spikeFactor;
+        y *= spikeFactor;
+        z *= spikeFactor;
+      }
 
-    if (geometry.attributes.position) {
-      geometry.attributes.position.needsUpdate = true;
+      // Deformación I/K (Squash / Stretch Y)
+      y *= params.squashY.value;
+
+      targetPositions[i3]     = x;
+      targetPositions[i3 + 1] = y;
+      targetPositions[i3 + 2] = z;
     }
   }
 
-  reset();
+  // Inicializar posiciones
+  calculateTargetShape();
+  for (let i = 0; i < count * 3; i++) positions[i] = targetPositions[i];
 
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-  // Generación de textura de partícula suave (Glow Point)
   const canvas = document.createElement('canvas');
-  canvas.width = 16; canvas.height = 16;
+  canvas.width = 64; canvas.height = 64;
   const ctx = canvas.getContext('2d');
-  const grad = ctx.createRadialGradient(8, 8, 0, 8, 8, 8);
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
   grad.addColorStop(0, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.4, 'rgba(255,255,255,0.5)');
+  grad.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+  grad.addColorStop(0.7, 'rgba(255,255,255,0.2)');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 16, 16);
+  ctx.fillRect(0, 0, 64, 64);
   const particleTexture = new THREE.CanvasTexture(canvas);
 
   const material = new THREE.PointsMaterial({
@@ -72,113 +114,95 @@ export function createSimulation({ scene, params, count = 65000 }) {
   const points = new THREE.Points(geometry, material);
   scene.add(points);
 
-  function stepSimulation() {
-    material.size = params.particleSize.value;
+  const palettes = [
+    { slow: new THREE.Color('#3a0007'), mid: new THREE.Color('#ff2200'), fast: new THREE.Color('#ffaa00'), core: new THREE.Color('#ffffff') }, // Dalia
+    { slow: new THREE.Color('#050026'), mid: new THREE.Color('#1f00ff'), fast: new THREE.Color('#ff0066'), core: new THREE.Color('#80efff') }, // Rosa UV
+    { slow: new THREE.Color('#1c0d00'), mid: new THREE.Color('#ff4800'), fast: new THREE.Color('#ffd700'), core: new THREE.Color('#ffffff') }, // Enjambre
+    { slow: new THREE.Color('#001829'), mid: new THREE.Color('#00d0ff'), fast: new THREE.Color('#ff3399'), core: new THREE.Color('#ffffff') }  // Prisma
+  ];
 
+  let time = 0;
+
+  function reset() {
+    calculateTargetShape();
+    for (let i = 0; i < count * 3; i++) {
+      positions[i] = targetPositions[i];
+      velocities[i] = 0;
+    }
+    geometry.attributes.position.needsUpdate = true;
+  }
+
+  function stepSimulation() {
     const dt = params.dt.value * params.timeScale.value;
+    time += dt;
+
+    calculateTargetShape();
+
     const pos = geometry.attributes.position.array;
     const col = geometry.attributes.color.array;
+    const pal = palettes[params.colorMode.value] || palettes[0];
+    const tempCol = new THREE.Color();
+
+    const kReturn = params.shapeMemory.value;
+    const pulseFactor = 1.0 + Math.sin(time * 6.0) * params.pulseAmount.value * 0.35;
+    const twist = params.twistAmount.value;
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
+
+      let tx = targetPositions[i3] * pulseFactor;
+      let ty = targetPositions[i3 + 1] * pulseFactor;
+      let tz = targetPositions[i3 + 2] * pulseFactor;
+
+      // Deformación J/L (Twist Axial)
+      if (Math.abs(twist) > 0.01) {
+        const cosT = Math.cos(ty * twist);
+        const sinT = Math.sin(ty * twist);
+        const rx = tx * cosT - tz * sinT;
+        const rz = tx * sinT + tz * cosT;
+        tx = rx; tz = rz;
+      }
+
       let px = pos[i3], py = pos[i3 + 1], pz = pos[i3 + 2];
       let vx = velocities[i3], vy = velocities[i3 + 1], vz = velocities[i3 + 2];
 
-      let ax = 0, ay = 0, az = 0;
+      // 1. Fuerza de Retorno a la Forma (Morfogénesis)
+      let ax = (tx - px) * kReturn;
+      let ay = (ty - py) * kReturn;
+      let az = (tz - pz) * kReturn;
 
-      // 1. Tecla W: Formación Espiral / Phyllotaxis (Girasol)
-      if (params.keyW.value) {
-        const phi = i * 137.5 * (Math.PI / 180);
-        const rSun = 0.012 * Math.sqrt(i);
-        ax += (Math.cos(phi) * rSun - px) * 5.0;
-        ay += (Math.sin(phi) * rSun - py) * 5.0;
+      // 2. Interacción con Mouse (Si se aplica fuerza radial)
+      if (params.radialStrength.value !== 0) {
+        const dx = px - params.attractor.value.x;
+        const dy = py - params.attractor.value.y;
+        const dz = pz - params.attractor.value.z;
+        const d2 = dx*dx + dy*dy + dz*dz + 0.1;
+        const f = params.radialStrength.value / d2;
+        ax += (dx / Math.sqrt(d2)) * f;
+        ay += (dy / Math.sqrt(d2)) * f;
+        az += (dz / Math.sqrt(d2)) * f;
       }
 
-      // 2. Tecla A: Repulsión Horizontal / Viento
-      if (params.keyA.value) {
-        ax -= 9.5;
-        ay += Math.sin(px * 2.5) * 2.5;
-      }
-
-      // 3. Tecla S: Drip Style (Gravedad Fluida)
-      if (params.keyS.value) {
-        ay -= 10.5;
-        ax += (Math.random() - 0.5) * 2.0;
-      }
-
-      // 4. Tecla D: Atracción Implosiva al Centro
-      if (params.keyD.value) {
-        const dist = Math.sqrt(px * px + py * py + pz * pz) + 0.1;
-        ax -= (px / dist) * 15.0;
-        ay -= (py / dist) * 15.0;
-        az -= (pz / dist) * 15.0;
-      }
-
-      // 5. Tecla I: Dispersión 3D Explosiva
-      if (params.keyI.value) {
-        const dist = Math.sqrt(px * px + py * py + pz * pz) + 0.1;
-        ax += (px / dist) * 16.0;
-        ay += (py / dist) * 16.0;
-        az += (pz / dist) * 16.0;
-      }
-
-      // 6. Tecla K: Compresión Radial sobre el Eje Central
-      if (params.keyK.value) {
-        ax -= px * 9.5;
-        az -= pz * 9.5;
-      }
-
-      // 7. Tecla J: Vórtice Anti-Horario
-      if (params.keyJ.value) {
-        ax += -pz * 7.5;
-        az += px * 7.5;
-      }
-
-      // 8. Tecla L: Vórtice Horario con Elevación Z
-      if (params.keyL.value) {
-        ax += pz * 7.5;
-        az += -px * 7.5;
-        ay += Math.cos(px * 2.0) * 4.0;
-      }
-
-      // Fricción / Amortiguamiento
-      ax -= vx * 0.18;
-      ay -= vy * 0.18;
-      az -= vz * 0.18;
+      // Fricción constante para evitar explosión de la forma
+      ax -= vx * 4.0;
+      ay -= vy * 4.0;
+      az -= vz * 4.0;
 
       vx += ax * dt; vy += ay * dt; vz += az * dt;
       px += vx * dt; py += vy * dt; pz += vz * dt;
 
-      // Recirculación limpia en fronteras
-      const limit = 8.5;
-      if (Math.abs(px) > limit || Math.abs(py) > limit || Math.abs(pz) > limit) {
-        px = (Math.random() - 0.5) * 1.5;
-        py = (Math.random() - 0.5) * 1.5;
-        pz = (Math.random() - 0.5) * 1.5;
-        vx = 0; vy = 0; vz = 0;
-      }
-
       pos[i3] = px; pos[i3 + 1] = py; pos[i3 + 2] = pz;
       velocities[i3] = vx; velocities[i3 + 1] = vy; velocities[i3 + 2] = vz;
 
-      // Mapeo Térmico por distancia radial + velocidad
-      const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      const rDist = Math.min(Math.sqrt(px * px + py * py + pz * pz) / 2.8, 1.0);
-      const factor = Math.min((rDist * 0.8 + speed * 0.08), 1.0);
+      // Color según desplazamiento respecto a su forma original
+      const displacement = Math.sqrt((px - tx)**2 + (py - ty)**2 + (pz - tz)**2);
+      const t = Math.min(displacement * 1.5, 1.0);
 
-      if (factor < 0.2) {
-        tempColor.copy(thermalPalette.core).lerp(thermalPalette.yellow, factor * 5.0);
-      } else if (factor < 0.45) {
-        tempColor.copy(thermalPalette.yellow).lerp(thermalPalette.orange, (factor - 0.2) * 4.0);
-      } else if (factor < 0.75) {
-        tempColor.copy(thermalPalette.orange).lerp(thermalPalette.magenta, (factor - 0.45) * 3.33);
-      } else {
-        tempColor.copy(thermalPalette.magenta).lerp(thermalPalette.purple, (factor - 0.75) * 4.0);
-      }
+      if (t < 0.3) tempCol.copy(pal.slow).lerp(pal.mid, t * 3.33);
+      else if (t < 0.8) tempCol.copy(pal.mid).lerp(pal.fast, (t - 0.3) * 2.0);
+      else tempCol.copy(pal.fast).lerp(pal.core, (t - 0.8) * 5.0);
 
-      col[i3] = tempColor.r;
-      col[i3 + 1] = tempColor.g;
-      col[i3 + 2] = tempColor.b;
+      col[i3] = tempCol.r; col[i3 + 1] = tempCol.g; col[i3 + 2] = tempCol.b;
     }
 
     geometry.attributes.position.needsUpdate = true;
