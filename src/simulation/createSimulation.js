@@ -210,4 +210,4 @@ export function createSimulation({ scene, params, count = 35000 }) {
   }
 
   return { reset, stepSimulation };
-}
+} 

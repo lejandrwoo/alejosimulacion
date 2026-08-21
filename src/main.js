@@ -49,10 +49,38 @@ function main() {
   let cameraMode = 0; // 0: Normal / OrbitControls, 1: Órbita Cinemática, 2: Zoom Macro, 3: Vista Cenital
   const targetCamPos = new THREE.Vector3(0, 0, 7.5);
 
-  const togglePresentation = () => {
+  // Activa/desactiva la interfaz, el cursor y la pantalla completa
+  const togglePresentation = async () => {
     isPresentationMode = !isPresentationMode;
     panel.setVisible(!isPresentationMode);
+
+    // Ocultar / Mostrar cursor en el lienzo 3D
+    renderer.domElement.style.cursor = isPresentationMode ? 'none' : 'default';
+
+    // Solicitud / Salida de Pantalla Completa
+    try {
+      if (isPresentationMode) {
+        if (!document.fullscreenElement) {
+          await document.documentElement.requestFullscreen();
+        }
+      } else {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Error al cambiar modo de pantalla completa:', err);
+    }
   };
+
+  // Sincroniza el estado cuando el usuario sale de pantalla completa presionando ESC
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && isPresentationMode) {
+      isPresentationMode = false;
+      panel.setVisible(true);
+      renderer.domElement.style.cursor = 'default';
+    }
+  });
 
   const panel = createLabPanel({
     params,
